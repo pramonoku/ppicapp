@@ -60,7 +60,7 @@
 (function(){
   'use strict';
   /* ====== PENGATURAN ====== */
-  var EXEC_URL = 'https://script.google.com/macros/s/AKfycbzNWY92QMYdAAhNpDn3AncpbNVnRKkM-LMKk4Iw15B4d9ezgoPDx_YlzybJomgveran/exec';
+  var EXEC_URL = 'https://script.google.com/macros/s/AKfycbzu3nPnPFforBtcvJCwZ1A1MD9wZkYYX76FFHAY3IGzvhRKd3punMs14e3iUeETeu72/exec';
   var TOKEN_KEY = 'ppicapp.session.v1';
   /* ======================== */
 
@@ -90,6 +90,7 @@
   /* ---- muat aplikasi: token dikirim lewat hash (#) sehingga tidak ikut terkirim ke server ---- */
   function appUrl(){
     var p = ['po='+encodeURIComponent(location.origin)];
+    try{ p.push('pb='+encodeURIComponent(location.origin+location.pathname.replace(/[^\/]*$/,''))); }catch(e){}
     try{ if((window.navigator && window.navigator.standalone===true) || (window.matchMedia && matchMedia('(display-mode: standalone)').matches)) p.push('sa=1'); }catch(e){}
     var t = getToken();
     if(t) p.push('ppt='+encodeURIComponent(t));
