@@ -8,7 +8,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="PPICapp">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" sizes="48x48" href="icons/favicon-48.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -78,11 +78,30 @@
   function clearToken(){ try{ localStorage.removeItem(TOKEN_KEY); }catch(e){} }
   try{ if(navigator.storage && navigator.storage.persist) navigator.storage.persist(); }catch(e){}
 
+  /* ---- kirim token ke aplikasi: iframe Google bersarang, jadi pesan dikirim ke semua frame turunan ---- */
+  function isStandalone(){ try{ return (window.navigator && window.navigator.standalone===true) || (window.matchMedia && matchMedia('(display-mode: standalone)').matches); }catch(e){ return false; } }
+  function frameWindows(){
+    var out=[];
+    try{
+      var cw=frame.contentWindow; out.push(cw);
+      for(var i=0;i<cw.length;i++){
+        var c=cw.frames[i]; out.push(c);
+        try{ for(var j=0;j<c.length;j++) out.push(c.frames[j]); }catch(e){}
+      }
+    }catch(e){}
+    return out;
+  }
+  function sendInit(){
+    var msg={source:'ppicwrap',type:'init',token:getToken(),standalone:isStandalone(),base:location.origin+location.pathname.replace(/[^\/]*$/,'')};
+    frameWindows().forEach(function(w){ try{ w.postMessage(msg,'*'); }catch(e){} });
+  }
+
   /* ---- pesan dari aplikasi (di dalam iframe Google Apps Script) ---- */
   function trustedOrigin(o){ return /^https:\/\/([a-z0-9-]+\.)*(googleusercontent\.com|google\.com)$/.test(o); }
   window.addEventListener('message', function(e){
     var d = e.data;
     if(!d || d.source!=='ppicapp' || !trustedOrigin(e.origin)) return;
+    if(d.type==='hello'){ sendInit(); note('hello dari aplikasi; token dikirim: '+(getToken()?'ya':'tidak')); return; }
     if(d.type==='token' && typeof d.token==='string' && d.token && d.token.length<4096){ setToken(d.token); note('token disimpan ('+d.token.length+' karakter)'); }
     else if(d.type==='logout'){ clearToken(); note('token dihapus (logout/sesi tidak valid)'); }
   });
@@ -109,7 +128,7 @@
     offline.classList.remove('show'); showSplash();
     frame.src = appUrl();
   }
-  frame.addEventListener('load', function(){ if(frame.src==='' || frame.src==='about:blank') return; clearTimeout(slowTimer); setTimeout(function(){ splash.classList.add('hide'); }, 250); note('halaman aplikasi dimuat'); });
+  frame.addEventListener('load', function(){ setTimeout(sendInit,250); setTimeout(sendInit,1200);  if(frame.src==='' || frame.src==='about:blank') return; clearTimeout(slowTimer); setTimeout(function(){ splash.classList.add('hide'); }, 250); note('halaman aplikasi dimuat'); });
   document.getElementById('reloadBtn').addEventListener('click', load);
   document.getElementById('retryBtn').addEventListener('click', load);
   window.addEventListener('online', function(){ if(offline.classList.contains('show')) load(); });

@@ -16,6 +16,9 @@
     var btnShare = document.getElementById('ppicShare');
     var btnOpen = document.getElementById('ppicOpen');
     function say(t) { msg.textContent = t || ''; }
+    var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    var standalone = (navigator.standalone === true) || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+    if (isIOS && standalone) document.getElementById('ppicDoPrint').style.display = 'none';
     document.getElementById('ppicClose').onclick = function () { window.close(); };
     document.getElementById('ppicDoPrint').onclick = function () {
       try { window.print(); } catch (e) { say('Cetak tidak tersedia di sini. Pakai tombol Buat PDF.'); }
@@ -34,15 +37,17 @@
       if (busy) return;
       busy = true; btnShare.style.display = 'none'; btnOpen.style.display = 'none';
       say('Menyiapkan PDF…');
-      loadLib().then(function () {
+      loadLib().then(function () { return new Promise(function (r) { setTimeout(r, 80); }); }).then(function () {
         if (ui) ui.style.visibility = 'hidden';
         var root = document.getElementById('ppicRoot') || document.body;
         var w = root.scrollWidth, h = root.scrollHeight;
-        var scale = Math.max(0.8, Math.min(2, Math.sqrt(12000000 / Math.max(1, w * h))));
+        var maxPx = isIOS ? 3500000 : 12000000, maxScale = isIOS ? 1.1 : 2;
+        var scale = Math.max(0.5, Math.min(maxScale, Math.sqrt(maxPx / Math.max(1, w * h))));
+        if (isIOS && h > 9000) say('Laporan panjang, hasil PDF dibuat lebih ringan. Mohon tunggu…');
         return window.html2pdf().set({
-          margin: 8, filename: cfg.filename, image: { type: 'jpeg', quality: 0.92 },
+          margin: 8, filename: cfg.filename, image: { type: 'jpeg', quality: isIOS ? 0.8 : 0.92 },
           html2canvas: { scale: scale, useCORS: true, backgroundColor: '#ffffff', scrollY: 0, windowWidth: w },
-          jsPDF: { unit: 'mm', format: 'a4', orientation: (cfg.orientation || 'landscape') },
+          jsPDF: { unit: 'mm', format: 'a4', orientation: (cfg.orientation || 'landscape'), compress: true },
           pagebreak: { mode: ['css', 'legacy'], avoid: ['tr', '.card', '.sum-box'] }
         }).from(root).outputPdf('blob');
       }).then(function (b) {
