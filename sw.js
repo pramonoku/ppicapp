@@ -1,7 +1,7 @@
 /* PPICapp pembungkus PWA — service worker sederhana.
    Hanya menyimpan "cangkang" pembungkus (index, ikon, manifest) di perangkat.
    Data & halaman aplikasi (Google Apps Script) selalu diambil langsung dari internet. */
-const CACHE = 'ppicapp-shell-v10';
+const CACHE = 'ppicapp-shell-v11';
 const BASE = self.registration.scope;                       // otomatis benar di domain utama maupun sub-alamat (GitHub Pages)
 const SHELL = ['', 'index.html', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/logo-256.png'].map(p => BASE + p);
 
