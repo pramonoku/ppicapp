@@ -298,54 +298,101 @@
         if (parts.length) pushText(parts.join('    '), styleOf(kids[0]), 0.3);
         return;
       }
-      Array.prototype.forEach.call(el.childNodes, function (n) {
-        if (n.nodeType === 3) pushText(n.textContent, st, 0.3);
-        else if (n.nodeType === 1) walk(n);
-      });
+      var nodes = Array.prototype.slice.call(el.childNodes), i = 0;
+      while (i < nodes.length) {
+        var n = nodes[i];
+        if (n.nodeType === 3) { pushText(n.textContent, st, 0.3); i++; continue; }
+        if (n.nodeType !== 1 || !usable(n)) { i++; continue; }
+        /* elemen bersaudara yang tampil sebaris (mis. kartu ringkasan) dijadikan kolom berdampingan */
+        var group = [n], r0 = rectOf(n), lastRight = r0.r, j = i + 1;
+        if (blockLike(n)) {
+          while (j < nodes.length) {
+            var m = nodes[j];
+            if (m.nodeType === 3) { if (norm(m.textContent)) break; j++; continue; }
+            if (m.nodeType !== 1 || !usable(m)) { j++; continue; }
+            var rm = rectOf(m);
+            if (blockLike(m) && Math.abs(rm.t - r0.t) <= 8 && rm.l >= lastRight - 2 && rm.w > 8) { group.push(m); lastRight = rm.r; j++; } else break;
+          }
+        }
+        if (group.length >= 2) {
+          blocks.push({ type: 'cols', items: group.map(function (g) { var rg = rectOf(g); return { blocks: mergeLabels(collect(g)), w: rg.w }; }) });
+          i = j;
+        } else { walk(n); i++; }
+      }
     }
+    /* label singkat (mis. "PCS", "M3") digabung dengan baris angka di bawahnya agar kartu lebih ringkas */
+    function mergeLabels(list) {
+      var out = [];
+      for (var i = 0; i < list.length; i++) {
+        var a = list[i], b = list[i + 1];
+        if (a.type === 'text' && b && b.type === 'text' && a.text.length <= 4) { out.push({ type: 'text', text: a.text + '   ' + b.text, style: b.style, gap: b.gap }); i++; }
+        else out.push(a);
+      }
+      return out;
+    }
+    function rectOf(k) { var r = k.getBoundingClientRect(); return { l: r.left, r: r.right, t: r.top, w: r.width }; }
+    function collect(el) { var saved = blocks; blocks = []; walk(el); var res = blocks; blocks = saved; return res; }
     walk(doc.body);
 
     /* ---- tata letak ---- */
     var land = (cfg.orientation || 'landscape') === 'landscape';
     var PW = land ? 841.89 : 595.28, PH = land ? 595.28 : 841.89, MX = 30, MT = 30, MB = 36;
-    var W = PW - MX * 2, pdf = new PdfBuilder(PW, PH), y = MT;
-    function ensure(h) { if (y + h > PH - MB) { pdf.newPage(); y = MT; return true; } return false; }
+    var W0 = PW - MX * 2, pdf = new PdfBuilder(PW, PH), y = MT;
+    function ensure(h, pg) { if (pg && y + h > PH - MB) { pdf.newPage(); y = MT; return true; } return false; }
 
-    blocks.forEach(function (b) {
-      if (b.type === 'rule') { ensure(8); pdf.line(MX, y + 2, MX + W, y + 2, [190, 200, 195], 0.7); y += 8; return; }
-      if (b.type === 'text') {
-        var s = b.style, lh = s.size * 1.25, lines = wrapText(b.text, s.size, s.bold, W);
-        y += s.size * b.gap;
-        lines.forEach(function (ln) {
-          ensure(lh);
-          var tw = measure(ln, s.size, s.bold), x = s.align === 'right' ? MX + W - tw : s.align === 'center' ? MX + (W - tw) / 2 : MX;
-          pdf.text(ln, x, y + s.size * 0.9, s.size, s.bold, s.color);
-          y += lh;
-        });
-        return;
-      }
-      /* tabel */
-      var nat = [], pad = 3.5, i;
+    function tableLayout(b, W) {
+      var nat = [], pad = 3.5, i, tot = 0;
       for (i = 0; i < b.cols; i++) nat[i] = 0;
       b.rows.forEach(function (r) { var ci = 0; r.cells.forEach(function (c) { if (c.span === 1) nat[ci] = Math.max(nat[ci], measure(c.text, c.size, c.bold) + pad * 2); ci += c.span; }); });
-      var tot = 0;
       for (i = 0; i < b.cols; i++) { nat[i] = Math.min(Math.max(nat[i], 26), W * 0.42); tot += nat[i]; }
       var cw = nat.map(function (v) { return v * W / tot; });
-      var heads = [];
-      function drawRow(r, idx) {
+      var rows = b.rows.map(function (r) {
         var hs = [], ci = 0;
         r.cells.forEach(function (c) {
           var wv = 0; for (var k = 0; k < c.span; k++) wv += cw[ci + k] || 0;
-          var lines = wrapText(c.text, c.size, c.bold, Math.max(10, wv - pad * 2));
-          hs.push({ c: c, w: wv, lines: lines, x0: ci });
+          hs.push({ c: c, w: wv, lines: wrapText(c.text, c.size, c.bold, Math.max(10, wv - pad * 2)) });
           ci += c.span;
         });
-        var rh = Math.max.apply(null, hs.map(function (h) { return h.lines.length * h.c.size * 1.2 + pad * 2 - 1; }));
-        if (ensure(rh) && !r.head) heads.forEach(function (hr) { drawRow(hr, -1); });
-        var x = MX;
-        hs.forEach(function (h) {
+        return { r: r, hs: hs, h: Math.max.apply(null, hs.map(function (h) { return h.lines.length * h.c.size * 1.2 + pad * 2 - 1; })) };
+      });
+      return { rows: rows, pad: pad };
+    }
+    function colsLayout(b, W) {
+      var gap = 8, pad = 6, n = b.items.length, tw = 0, i;
+      b.items.forEach(function (it) { tw += Math.max(1, it.w); });
+      var widths = b.items.map(function (it) { return (W - gap * (n - 1)) * Math.max(1, it.w) / tw; });
+      var h = 0;
+      b.items.forEach(function (it, k) {
+        var hh = pad * 2; it.blocks.forEach(function (bl) { hh += heightOf(bl, widths[k] - pad * 2); });
+        h = Math.max(h, hh);
+      });
+      return { widths: widths, h: h, gap: gap, pad: pad };
+    }
+    function heightOf(b, W) {
+      if (b.type === 'rule') return 8;
+      if (b.type === 'text') { var s = b.style; return s.size * b.gap + wrapText(b.text, s.size, s.bold, W).length * s.size * 1.25; }
+      if (b.type === 'table') { var t = tableLayout(b, W), h = 8; t.rows.forEach(function (r) { h += r.h; }); return h; }
+      if (b.type === 'cols') return colsLayout(b, W).h + 6;
+      return 0;
+    }
+    function drawText(b, x0, W, pg) {
+      var s = b.style, lh = s.size * 1.25, lines = wrapText(b.text, s.size, s.bold, W);
+      y += s.size * b.gap;
+      lines.forEach(function (ln) {
+        ensure(lh, pg);
+        var tw = measure(ln, s.size, s.bold), x = s.align === 'right' ? x0 + W - tw : s.align === 'center' ? x0 + (W - tw) / 2 : x0;
+        pdf.text(ln, x, y + s.size * 0.9, s.size, s.bold, s.color);
+        y += lh;
+      });
+    }
+    function drawTable(b, x0, W, pg) {
+      var t = tableLayout(b, W), pad = t.pad, heads = [];
+      function drawRow(row, idx) {
+        if (ensure(row.h, pg) && !row.r.head) heads.forEach(function (hr) { drawRow(hr, -1); });
+        var x = x0;
+        row.hs.forEach(function (h) {
           var c = h.c, fill = c.bg || (c.head ? [225, 238, 231] : (idx > 0 && idx % 2 === 0 ? [246, 250, 248] : null));
-          pdf.rect(x, y, h.w, rh, fill, [192, 204, 198], 0.5);
+          pdf.rect(x, y, h.w, row.h, fill, [192, 204, 198], 0.5);
           var ty = y + pad + c.size * 0.9;
           h.lines.forEach(function (ln) {
             var tw = measure(ln, c.size, c.bold), tx = c.align === 'right' ? x + h.w - pad - tw : c.align === 'center' ? x + (h.w - tw) / 2 : x + pad;
@@ -354,11 +401,32 @@
           });
           x += h.w;
         });
-        y += rh;
+        y += row.h;
       }
-      b.rows.forEach(function (r, idx) { if (r.head) heads.push(r); drawRow(r, idx); });
+      t.rows.forEach(function (row, idx) { if (row.r.head) heads.push(row); drawRow(row, idx); });
       y += 8;
-    });
+    }
+    function drawCols(b, x0, W, pg) {
+      var L = colsLayout(b, W);
+      ensure(L.h + 6, pg);
+      var y0 = y, x = x0;
+      b.items.forEach(function (it, k) {
+        pdf.rect(x, y0, L.widths[k], L.h, [247, 250, 248], [200, 210, 205], 0.6);
+        y = y0 + L.pad;
+        drawBlocks(it.blocks, x + L.pad, L.widths[k] - L.pad * 2, false);
+        x += L.widths[k] + L.gap;
+      });
+      y = y0 + L.h + 6;
+    }
+    function drawBlocks(list, x0, W, pg) {
+      list.forEach(function (b) {
+        if (b.type === 'rule') { ensure(8, pg); pdf.line(x0, y + 2, x0 + W, y + 2, [190, 200, 195], 0.7); y += 8; }
+        else if (b.type === 'text') drawText(b, x0, W, pg);
+        else if (b.type === 'table') drawTable(b, x0, W, pg);
+        else if (b.type === 'cols') drawCols(b, x0, W, pg);
+      });
+    }
+    drawBlocks(blocks, MX, W0, true);
 
     /* ---- footer ---- */
     var n = pdf.pages.length, stamp;
