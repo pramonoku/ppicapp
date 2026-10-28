@@ -451,17 +451,7 @@
     if (ms) t._h = setTimeout(function () { t.style.display = 'none'; }, ms);
   }
 
-  /* Render salinan HTML menjadi PDF berbasis tampilan agar SVG/grafik dan styling ikut masuk. */
-  function loadHtml2Pdf() {
-    return new Promise(function (resolve, reject) {
-      if (window.html2pdf) return resolve();
-      var sc = document.createElement('script');
-      sc.src = LIB;
-      sc.onload = function () { resolve(); };
-      sc.onerror = function () { reject(new Error('Pustaka PDF tidak bisa dimuat. Periksa koneksi internet lalu coba lagi.')); };
-      document.head.appendChild(sc);
-    });
-  }
+  /* Tulis HTML ke iframe tersembunyi (tanpa skrip), baca tata letaknya, buat PDF. */
   function renderHtmlToPdf(html, cfg, done) {
     var f = document.createElement('iframe');
     f.setAttribute('sandbox', 'allow-same-origin');
@@ -469,50 +459,12 @@
     document.body.appendChild(f);
     var d = f.contentDocument;
     d.open(); d.write(html); d.close();
-    function cleanup(err, buf) {
-      try { f.parentNode.removeChild(f); } catch (e) {}
+    setTimeout(function () {
+      var buf = null, err = null;
+      try { buf = pdfFromDocument(d, cfg); } catch (e) { err = e; }
+      try { f.parentNode.removeChild(f); } catch (e2) {}
       done(err, buf);
-    }
-    /* Tunggu layout, font, gambar dan stylesheet; 300 ms saja tidak konsisten di iOS. */
-    Promise.all([
-      loadHtml2Pdf(),
-      new Promise(function (resolve) {
-        var settled = false;
-        function finish() { if (!settled) { settled = true; resolve(); } }
-        if (d.readyState === 'complete') finish();
-        else f.onload = finish;
-        setTimeout(finish, 1800);
-      })
-    ]).then(function () {
-      var imgs = Array.prototype.slice.call(d.images || []);
-      return Promise.all(imgs.map(function (img) {
-        if (img.complete) return Promise.resolve();
-        return new Promise(function (resolve) {
-          img.onload = resolve; img.onerror = resolve; setTimeout(resolve, 1500);
-        });
-      }));
-    }).then(function () {
-      return new Promise(function (resolve) { setTimeout(resolve, 350); });
-    }).then(function () {
-      var root = d.getElementById('ppicRoot') || d.body;
-      var w = Math.max(root.scrollWidth || 0, root.getBoundingClientRect().width || 0, cfg.layoutWidth || 1100);
-      var h = Math.max(root.scrollHeight || 0, root.getBoundingClientRect().height || 0);
-      var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-      var maxPx = isIOS ? 3000000 : 10000000;
-      var scale = Math.max(0.6, Math.min(isIOS ? 1.15 : 1.8, Math.sqrt(maxPx / Math.max(1, w * h))));
-      return window.html2pdf().set({
-        margin: 8,
-        filename: cfg.filename || 'laporan.pdf',
-        image: { type: 'jpeg', quality: isIOS ? 0.82 : 0.92 },
-        html2canvas: { scale: scale, useCORS: true, allowTaint: false, backgroundColor: '#ffffff', scrollY: 0, windowWidth: w, logging: false },
-        jsPDF: { unit: 'mm', format: 'a4', orientation: cfg.orientation || 'landscape', compress: true },
-        pagebreak: { mode: ['css', 'legacy'], avoid: ['tr', '.card', '.sum-box'] }
-      }).from(root).outputPdf('arraybuffer');
-    }).then(function (buf) {
-      cleanup(null, buf);
-    }).catch(function (err) {
-      cleanup(err, null);
-    });
+    }, 300);
   }
 
   function sendPdf(buf, cfg) {
@@ -537,21 +489,9 @@
     var orig = Array.prototype.map.call(document.querySelectorAll('style'), function (st) { return st.textContent; }).join('\n');
     var forced = orig.replace(/@media\s+print\s*\{/g, '@media all{');
     var clone = page.cloneNode(true);
-    /* cloneNode tidak menyalin bitmap canvas; ubah salinan canvas menjadi gambar sebelum serialisasi. */
-    try {
-      var sourceCanvases = page.querySelectorAll('canvas'), clonedCanvases = clone.querySelectorAll('canvas');
-      Array.prototype.forEach.call(sourceCanvases, function (src, i) {
-        var dst = clonedCanvases[i]; if (!dst || !src.width || !src.height) return;
-        var img = document.createElement('img');
-        img.alt = src.getAttribute('aria-label') || 'Grafik';
-        img.width = src.width; img.height = src.height;
-        img.style.cssText = src.getAttribute('style') || 'max-width:100%;height:auto';
-        try { img.src = src.toDataURL('image/png'); dst.parentNode.replaceChild(img, dst); } catch (e) {}
-      });
-    } catch (e) {}
     clone.classList.remove('page-hidden');
     Array.prototype.forEach.call(clone.querySelectorAll('script,.print-btn,.expand-btn'), function (el) { el.remove(); });
-    var html = '<!doctype html><html lang="id"><head><meta charset="utf-8"><style>' + orig + '</style><style>' + forced + '</style><style>html,body{margin:0!important;background:#fff!important}#ppicRoot{display:block!important;width:100%!important;overflow:visible!important}#ppicRoot *{max-height:none}</style></head>' +
+    var html = '<!doctype html><html lang="id"><head><meta charset="utf-8"><style>' + orig + '</style><style>' + forced + '</style><style>html,body{margin:0!important;background:#fff!important}</style></head>' +
       '<body class="' + cfg.bodyClass + '"><div id="app" style="display:block"><main style="display:block;padding:0">' + clone.outerHTML + '</main></div></body></html>';
     restore();
     toast('Membuat PDF…');
