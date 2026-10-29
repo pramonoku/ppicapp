@@ -451,52 +451,8 @@
     if (ms) t._h = setTimeout(function () { t.style.display = 'none'; }, ms);
   }
 
-  /* Jalur visual khusus untuk dua laporan yang memiliki grafik SVG/elemen visual.
-     Jalur lama tetap dipakai semua menu lain agar tidak mengubah perilaku yang sudah stabil. */
-  function renderHtmlToVisualPdf(html, cfg, done) {
-    function loadVisualLib() {
-      return new Promise(function (resolve, reject) {
-        if (window.html2pdf) return resolve();
-        var sc = document.createElement('script');
-        sc.src = LIB;
-        sc.onload = resolve;
-        sc.onerror = function () { reject(new Error('Pustaka PDF visual gagal dimuat. Periksa koneksi internet lalu coba lagi.')); };
-        document.head.appendChild(sc);
-      });
-    }
-    var f = document.createElement('iframe');
-    f.setAttribute('sandbox', 'allow-same-origin');
-    f.style.cssText = 'position:fixed;left:-12000px;top:0;width:' + (cfg.layoutWidth || 1100) + 'px;height:1200px;border:0;opacity:0;pointer-events:none';
-    document.body.appendChild(f);
-    var d = f.contentDocument;
-    d.open(); d.write(html); d.close();
-    var finished = false;
-    function finish(err, buf) {
-      if (finished) return; finished = true;
-      try { f.parentNode.removeChild(f); } catch (e) {}
-      done(err, buf);
-    }
-    loadVisualLib().then(function () {
-      return new Promise(function (resolve) { setTimeout(resolve, 900); });
-    }).then(function () {
-      var root = d.getElementById('ppicRoot') || d.body;
-      if (!root || !root.children.length) throw new Error('Konten laporan tidak ditemukan saat membuat PDF.');
-      var w = Math.max(root.scrollWidth || 0, d.documentElement.scrollWidth || 0, cfg.layoutWidth || 1100);
-      var h = Math.max(root.scrollHeight || 0, d.documentElement.scrollHeight || 0, 300);
-      var scale = Math.max(0.7, Math.min(1.5, Math.sqrt(4500000 / Math.max(1, w * h))));
-      return window.html2pdf().set({
-        margin: [8, 8, 8, 8], filename: cfg.filename || 'laporan.pdf',
-        image: { type: 'jpeg', quality: 0.94 },
-        html2canvas: { scale: scale, useCORS: true, backgroundColor: '#ffffff', scrollY: 0, windowWidth: w, logging: false },
-        jsPDF: { unit: 'mm', format: 'a4', orientation: cfg.orientation || 'landscape', compress: true },
-        pagebreak: { mode: ['css', 'legacy'], avoid: ['tr', '.card', '.sum-box'] }
-      }).from(root).outputPdf('arraybuffer');
-    }).then(function (buf) { finish(null, buf); }).catch(function (err) { finish(err); });
-  }
-
-  /* Tulis HTML ke iframe tersembunyi, lalu pilih mesin sesuai laporan. */
+  /* Tulis HTML ke iframe tersembunyi (tanpa skrip), baca tata letaknya, buat PDF. */
   function renderHtmlToPdf(html, cfg, done) {
-    if (cfg && cfg.visualPdf) return renderHtmlToVisualPdf(html, cfg, done);
     var f = document.createElement('iframe');
     f.setAttribute('sandbox', 'allow-same-origin');
     f.style.cssText = 'position:fixed;left:-12000px;top:0;width:' + (cfg.layoutWidth || 1100) + 'px;height:900px;border:0;opacity:0;pointer-events:none';
@@ -525,6 +481,66 @@
     sendPdf(buf, cfg);
   }
 
+  /* Ekspor visual khusus Laporan Grading. Jalur lain tetap memakai PDF vektor lama. */
+  function loadHtml2Pdf() {
+    return new Promise(function (resolve, reject) {
+      if (window.html2pdf) { resolve(); return; }
+      var sc = document.createElement('script');
+      sc.src = LIB;
+      sc.onload = function () { window.html2pdf ? resolve() : reject(new Error('Pustaka PDF tidak tersedia')); };
+      sc.onerror = function () { reject(new Error('Pustaka PDF tidak bisa dimuat. Periksa koneksi internet.')); };
+      document.head.appendChild(sc);
+    });
+  }
+
+  function renderGradingVisualPdf(html, cfg, done) {
+    var f = document.createElement('iframe');
+    f.setAttribute('sandbox', 'allow-same-origin');
+    f.style.cssText = 'position:fixed;left:-15000px;top:0;width:1100px;height:1200px;border:0;opacity:0;pointer-events:none';
+    document.body.appendChild(f);
+    var finished = false;
+    function finish(err, buf) {
+      if (finished) return; finished = true;
+      try { if (f.parentNode) f.parentNode.removeChild(f); } catch (e) {}
+      done(err, buf);
+    }
+    try {
+      f.onload = function () {
+        var d = f.contentDocument, root = d && d.getElementById('ppicRoot');
+        if (!root) { finish(new Error('Konten Laporan Grading tidak ditemukan')); return; }
+        loadHtml2Pdf().then(function () {
+          return new Promise(function (resolve) {
+            var imgs = Array.prototype.slice.call(d.images || []);
+            Promise.all(imgs.map(function (im) {
+              if (im.complete) return Promise.resolve();
+              return new Promise(function (r) { im.onload = r; im.onerror = r; setTimeout(r, 1800); });
+            })).then(function () {
+              var fontsReady = d.fonts && d.fonts.ready ? d.fonts.ready.catch(function () {}) : Promise.resolve();
+              fontsReady.then(function () { setTimeout(resolve, 350); });
+            });
+          });
+        }).then(function () {
+          var w = Math.max(900, Math.min(1400, root.scrollWidth || 1100));
+          return window.html2pdf().set({
+            margin: [7, 7, 9, 7],
+            filename: cfg.filename || 'Laporan-Grading.pdf',
+            image: { type: 'jpeg', quality: 0.94 },
+            html2canvas: { scale: 1.35, useCORS: true, backgroundColor: '#ffffff', scrollY: 0, windowWidth: w, logging: false },
+            jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape', compress: true },
+            pagebreak: { mode: ['css', 'legacy'], avoid: ['.grading-card', '.card', '.sum-box', 'svg'] }
+          }).from(root).outputPdf('blob');
+        }).then(function (blob) {
+          if (blob && blob.arrayBuffer) return blob.arrayBuffer();
+          return new Promise(function (resolve, reject) {
+            var reader = new FileReader(); reader.onload = function () { resolve(reader.result); }; reader.onerror = reject; reader.readAsArrayBuffer(blob);
+          });
+        }).then(function (buf) { finish(null, buf); }).catch(function (e) { finish(e); });
+      };
+      var d = f.contentDocument;
+      d.open(); d.write(html); d.close();
+    } catch (e) { finish(e); }
+  }
+
   /* Salin satu halaman aplikasi (tata letak cetak) lalu ekspor sebagai PDF, tanpa jendela popup. */
   function exportPage(cfg) {
     var page = document.getElementById(cfg.nodeId);
@@ -535,10 +551,18 @@
     var clone = page.cloneNode(true);
     clone.classList.remove('page-hidden');
     Array.prototype.forEach.call(clone.querySelectorAll('script,.print-btn,.expand-btn'), function (el) { el.remove(); });
-    var html = '<!doctype html><html lang="id"><head><meta charset="utf-8"><style>' + orig + '</style><style>' + forced + '</style><style>html,body{margin:0!important;background:#fff!important}</style></head>' +
-      '<body class="' + cfg.bodyClass + '"><div id="app" style="display:block"><main style="display:block;padding:0">' + clone.outerHTML + '</main></div></body></html>';
+    var gradingVisualCss = cfg && cfg.filename === 'Laporan-Grading.pdf'
+      ? 'body.print-grading,body.print-grading #app,body.print-grading main,body.print-grading #page-grading{background:#fff!important;color:#111827!important}body.print-grading #page-grading .card,body.print-grading #page-grading .section-grid,body.print-grading #page-grading .grid{background:#fff!important}body.print-grading #page-grading .card{box-shadow:none!important;border-color:#cbd5e1!important;break-inside:avoid!important;page-break-inside:avoid!important}body.print-grading #page-grading svg{max-width:100%!important;overflow:visible!important}body.print-grading #page-grading .chart,body.print-grading #page-grading .table-wrap{overflow:visible!important;max-height:none!important}'
+      : '';
+    var html = '<!doctype html><html lang="id"><head><meta charset="utf-8"><style>' + orig + '</style><style>' + forced + '</style><style>html,body{margin:0!important;background:#fff!important}' + gradingVisualCss + '</style></head>' +
+      '<body class="' + cfg.bodyClass + '"><div id="app" style="display:block"><main style="display:block;padding:0"><div id="ppicRoot">' + clone.outerHTML + '</div></main></div></body></html>';
     restore();
     toast('Membuat PDF…');
+    /* Hanya Laporan Grading memakai render visual agar grafik, warna, dan layout kartu ikut tercetak. */
+    if (cfg && cfg.filename === 'Laporan-Grading.pdf') {
+      renderGradingVisualPdf(html, cfg, function (err, buf) { finishExport(err, buf, cfg); });
+      return;
+    }
     renderHtmlToPdf(html, cfg, function (err, buf) { finishExport(err, buf, cfg); });
   }
 
