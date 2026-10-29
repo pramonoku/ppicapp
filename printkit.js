@@ -300,6 +300,16 @@
         });
         if (cells.length) { rows.push({ cells: cells, head: cells.every(function (x) { return x.head; }) }); cols = Math.max(cols, n); }
       });
+      /* Baris dengan colspan (mis. baris catatan) tidak boleh melebarkan tabel melebihi kolom yang benar-benar tampil. */
+      var plain = 0;
+      rows.forEach(function (rw) { if (rw.cells.every(function (c) { return c.span === 1; })) plain = Math.max(plain, rw.cells.length); });
+      if (plain && plain < cols) {
+        cols = plain;
+        rows.forEach(function (rw) {
+          var tot = rw.cells.reduce(function (a, c) { return a + c.span; }, 0);
+          rw.cells.forEach(function (c) { if (tot > cols && c.span > 1) { var cut = Math.min(c.span - 1, tot - cols); c.span -= cut; tot -= cut; } });
+        });
+      }
       return rows.length ? { type: 'table', rows: rows, cols: cols } : null;
     }
 
@@ -574,13 +584,13 @@
       cl.setAttribute('width', w); cl.setAttribute('height', h);
       cl.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
       var xml = new XMLSerializer().serializeToString(cl), img = new Image();
-      var sc = Math.max(1, Math.min(3, Math.sqrt(2800000 / (w * h))));
+      var sc = Math.max(1, Math.min(2, Math.sqrt(1600000 / (w * h))));
       img.onload = function () {
         try {
           var cv = document.createElement('canvas'); cv.width = Math.round(w * sc); cv.height = Math.round(h * sc);
           var cx = cv.getContext('2d'); cx.fillStyle = '#ffffff'; cx.fillRect(0, 0, cv.width, cv.height);
           cx.drawImage(img, 0, 0, cv.width, cv.height);
-          fin({ w: cv.width, h: cv.height, data: atob(cv.toDataURL('image/jpeg', 0.95).split(',')[1]) });
+          fin({ w: cv.width, h: cv.height, data: atob(cv.toDataURL('image/jpeg', 0.88).split(',')[1]) });
         } catch (e) { fin(null); }
       };
       img.onerror = function () { fin(null); };
@@ -595,7 +605,7 @@
       var bi = (el.getAttribute('style') || '') + ' ' + (win.getComputedStyle(el).backgroundImage || ''), re = /(rgba?\([^)]*\)|#[0-9a-fA-F]{3,8})\s+([\d.]+)%\s+([\d.]+)%/g, m, segs = [];
       while ((m = re.exec(bi))) segs.push({ c: m[1], a: +m[2], b: +m[3] });
       if (!segs.length) return null;
-      var sc = Math.max(2, Math.min(3, Math.sqrt(2800000 / (w * h)))); var cv = document.createElement('canvas'); cv.width = Math.round(w * sc); cv.height = Math.round(h * sc);
+      var sc = 2, cv = document.createElement('canvas'); cv.width = w * sc; cv.height = h * sc;
       var cx = cv.getContext('2d'), R = Math.min(w, h) * sc / 2, mx = w * sc / 2, my = h * sc / 2;
       cx.fillStyle = '#ffffff'; cx.fillRect(0, 0, cv.width, cv.height);
       segs.forEach(function (sg) {
@@ -609,7 +619,7 @@
       cx.textAlign = 'center'; cx.textBaseline = 'middle'; cx.fillStyle = '#0f2540';
       if (tot) { cx.font = 'bold ' + Math.round(cr * 0.38) + 'px Helvetica, Arial, sans-serif'; cx.fillText(norm0(tot.textContent), mx, my - cr * 0.1); }
       if (cap) { cx.font = Math.round(cr * 0.2) + 'px Helvetica, Arial, sans-serif'; cx.fillStyle = '#64748b'; cx.fillText(norm0(cap.textContent), mx, my + cr * 0.32); }
-      return { w: cv.width, h: cv.height, data: atob(cv.toDataURL('image/jpeg', 0.95).split(',')[1]) };
+      return { w: cv.width, h: cv.height, data: atob(cv.toDataURL('image/jpeg', 0.9).split(',')[1]) };
     } catch (e) { return null; }
   }
   function norm0(t) { return String(t || '').replace(/\s+/g, ' ').trim(); }
