@@ -451,8 +451,52 @@
     if (ms) t._h = setTimeout(function () { t.style.display = 'none'; }, ms);
   }
 
-  /* Tulis HTML ke iframe tersembunyi (tanpa skrip), baca tata letaknya, buat PDF. */
+  /* Jalur visual khusus untuk dua laporan yang memiliki grafik SVG/elemen visual.
+     Jalur lama tetap dipakai semua menu lain agar tidak mengubah perilaku yang sudah stabil. */
+  function renderHtmlToVisualPdf(html, cfg, done) {
+    function loadVisualLib() {
+      return new Promise(function (resolve, reject) {
+        if (window.html2pdf) return resolve();
+        var sc = document.createElement('script');
+        sc.src = LIB;
+        sc.onload = resolve;
+        sc.onerror = function () { reject(new Error('Pustaka PDF visual gagal dimuat. Periksa koneksi internet lalu coba lagi.')); };
+        document.head.appendChild(sc);
+      });
+    }
+    var f = document.createElement('iframe');
+    f.setAttribute('sandbox', 'allow-same-origin');
+    f.style.cssText = 'position:fixed;left:-12000px;top:0;width:' + (cfg.layoutWidth || 1100) + 'px;height:1200px;border:0;opacity:0;pointer-events:none';
+    document.body.appendChild(f);
+    var d = f.contentDocument;
+    d.open(); d.write(html); d.close();
+    var finished = false;
+    function finish(err, buf) {
+      if (finished) return; finished = true;
+      try { f.parentNode.removeChild(f); } catch (e) {}
+      done(err, buf);
+    }
+    loadVisualLib().then(function () {
+      return new Promise(function (resolve) { setTimeout(resolve, 900); });
+    }).then(function () {
+      var root = d.getElementById('ppicRoot') || d.body;
+      if (!root || !root.children.length) throw new Error('Konten laporan tidak ditemukan saat membuat PDF.');
+      var w = Math.max(root.scrollWidth || 0, d.documentElement.scrollWidth || 0, cfg.layoutWidth || 1100);
+      var h = Math.max(root.scrollHeight || 0, d.documentElement.scrollHeight || 0, 300);
+      var scale = Math.max(0.7, Math.min(1.5, Math.sqrt(4500000 / Math.max(1, w * h))));
+      return window.html2pdf().set({
+        margin: [8, 8, 8, 8], filename: cfg.filename || 'laporan.pdf',
+        image: { type: 'jpeg', quality: 0.94 },
+        html2canvas: { scale: scale, useCORS: true, backgroundColor: '#ffffff', scrollY: 0, windowWidth: w, logging: false },
+        jsPDF: { unit: 'mm', format: 'a4', orientation: cfg.orientation || 'landscape', compress: true },
+        pagebreak: { mode: ['css', 'legacy'], avoid: ['tr', '.card', '.sum-box'] }
+      }).from(root).outputPdf('arraybuffer');
+    }).then(function (buf) { finish(null, buf); }).catch(function (err) { finish(err); });
+  }
+
+  /* Tulis HTML ke iframe tersembunyi, lalu pilih mesin sesuai laporan. */
   function renderHtmlToPdf(html, cfg, done) {
+    if (cfg && cfg.visualPdf) return renderHtmlToVisualPdf(html, cfg, done);
     var f = document.createElement('iframe');
     f.setAttribute('sandbox', 'allow-same-origin');
     f.style.cssText = 'position:fixed;left:-12000px;top:0;width:' + (cfg.layoutWidth || 1100) + 'px;height:900px;border:0;opacity:0;pointer-events:none';
