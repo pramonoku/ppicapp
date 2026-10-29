@@ -138,13 +138,13 @@
      Tidak memakai gambar halaman, jadi hemat memori dan tidak butuh internet. */
   var XHTML = 'http://www.w3.org/1999/xhtml';
   var SKIP = { SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, BUTTON: 1, INPUT: 1, SELECT: 1, TEXTAREA: 1, CANVAS: 1, IMG: 1, HEAD: 1, LINK: 1, META: 1, TITLE: 1, IFRAME: 1 };
-  var mctx = null;
+  var mctx = null, imgStore = [];
   function measure(text, size, bold) {
     if (!mctx) mctx = document.createElement('canvas').getContext('2d');
     mctx.font = (bold ? 'bold ' : '') + size + 'px Helvetica, Arial, sans-serif';
     return mctx.measureText(text).width;
   }
-  var WIN = { '\u2026': '\x85', '\u2013': '\x96', '\u2014': '\x97', '\u2022': '\x95', '\u2018': '\x91', '\u2019': '\x92', '\u201c': '\x93', '\u201d': '\x94', '\u20ac': '\x80', '\u2192': '->', '\u2190': '<-', '\u2264': '<=', '\u2265': '>=', '\u2212': '-' };
+  var WIN = { '\u2026': '\x85', '\u2013': '\x96', '\u2014': '\x97', '\u2022': '\x95', '\u2018': '\x91', '\u2019': '\x92', '\u201c': '\x93', '\u201d': '\x94', '\u20ac': '\x80', '\u2192': '->', '\u2190': '<-', '\u2264': '<=', '\u2265': '>=', '\u2212': '-', '\u25b2': '+', '\u25bc': '-', '\u25b4': '+', '\u25be': '-', '\uff0b': '+', '\uff0d': '-', '\u00d7': 'x' };
   function toWin(str) {
     var out = '';
     for (var i = 0; i < str.length; i++) {
@@ -161,7 +161,7 @@
   function num(v) { return String(Math.round(v * 100) / 100); }
   function col(c) { return (c[0] / 255).toFixed(3) + ' ' + (c[1] / 255).toFixed(3) + ' ' + (c[2] / 255).toFixed(3); }
 
-  function PdfBuilder(w, h) { this.w = w; this.h = h; this.pages = []; this.newPage(); }
+  function PdfBuilder(w, h) { this.w = w; this.h = h; this.pages = []; this.imgs = []; this.newPage(); }
   PdfBuilder.prototype.newPage = function () { this.cur = []; this.pages.push(this.cur); };
   PdfBuilder.prototype.text = function (str, x, yTop, size, bold, rgb) {
     this.cur.push('BT /' + (bold ? 'F2' : 'F1') + ' ' + num(size) + ' Tf ' + col(rgb) + ' rg ' + num(x) + ' ' + num(this.h - yTop) + ' Td ' + pdfStr(str) + ' Tj ET');
@@ -173,20 +173,31 @@
     ops += num(x) + ' ' + num(this.h - yTop - h) + ' ' + num(w) + ' ' + num(h) + ' re ' + (fill && stroke ? 'B' : fill ? 'f' : 'S');
     this.cur.push(ops);
   };
+  PdfBuilder.prototype.image = function (img, x, yTop, w, h) {
+    var k = this.imgs.indexOf(img);
+    if (k < 0) { k = this.imgs.length; this.imgs.push(img); }
+    this.cur.used = this.cur.used || {}; this.cur.used[k] = 1;
+    this.cur.push('q ' + num(w) + ' 0 0 ' + num(h) + ' ' + num(x) + ' ' + num(this.h - yTop - h) + ' cm /Im' + k + ' Do Q');
+  };
   PdfBuilder.prototype.line = function (x1, y1, x2, y2, rgb, lw) {
     this.cur.push(col(rgb) + ' RG ' + num(lw || 0.5) + ' w ' + num(x1) + ' ' + num(this.h - y1) + ' m ' + num(x2) + ' ' + num(this.h - y2) + ' l S');
   };
   PdfBuilder.prototype.build = function () {
-    var objs = [], n = this.pages.length, kids = [];
+    var objs = [], n = this.pages.length, m = this.imgs.length, kids = [], imgBase = 5 + n * 2;
     for (var i = 0; i < n; i++) kids.push((5 + i * 2) + ' 0 R');
     objs[1] = '<< /Type /Catalog /Pages 2 0 R >>';
     objs[2] = '<< /Type /Pages /Kids [' + kids.join(' ') + '] /Count ' + n + ' >>';
     objs[3] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>';
     objs[4] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>';
     for (var k = 0; k < n; k++) {
-      var content = this.pages[k].join('\n');
-      objs[5 + k * 2] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + num(this.w) + ' ' + num(this.h) + '] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ' + (6 + k * 2) + ' 0 R >>';
+      var content = this.pages[k].join('\n'), xo = '', used = this.pages[k].used || {};
+      for (var u in used) if (used.hasOwnProperty(u)) xo += '/Im' + u + ' ' + (imgBase + (+u)) + ' 0 R ';
+      objs[5 + k * 2] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + num(this.w) + ' ' + num(this.h) + '] /Resources << /Font << /F1 3 0 R /F2 4 0 R >>' + (xo ? ' /XObject << ' + xo + '>>' : '') + ' >> /Contents ' + (6 + k * 2) + ' 0 R >>';
       objs[6 + k * 2] = '<< /Length ' + content.length + ' >>\nstream\n' + content + '\nendstream';
+    }
+    for (var q0 = 0; q0 < m; q0++) {
+      var im = this.imgs[q0];
+      objs[imgBase + q0] = '<< /Type /XObject /Subtype /Image /Width ' + im.w + ' /Height ' + im.h + ' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' + im.data.length + ' >>\nstream\n' + im.data + '\nendstream';
     }
     var out = '%PDF-1.4\n%\xE2\xE3\xCF\xD3\n', offsets = [];
     for (var o = 1; o < objs.length; o++) { offsets[o] = out.length; out += o + ' 0 obj\n' + objs[o] + '\nendobj\n'; }
@@ -229,14 +240,20 @@
     var win = doc.defaultView;
     function cs(el) { return win.getComputedStyle(el); }
     function norm(t) { return String(t || '').replace(/\s+/g, ' ').trim(); }
+    function imgOf(el) {
+      if (el.nodeType !== 1 || el.localName !== 'svg') return null;
+      var k = el.getAttribute('data-ppicimg');
+      return k === null ? null : (imgStore[+k] || null);
+    }
     function usable(el) {
+      if (imgOf(el)) return cs(el).display !== 'none' && cs(el).visibility !== 'hidden';
       if (el.nodeType !== 1 || el.namespaceURI !== XHTML || SKIP[el.tagName]) return false;
       var c = cs(el);
       return c.display !== 'none' && c.visibility !== 'hidden';
     }
     function kidsOf(el) { return Array.prototype.filter.call(el.children, usable); }
     function blockLike(el) {
-      if (el.tagName === 'TABLE') return true;
+      if (el.tagName === 'TABLE' || imgOf(el)) return true;
       var d = cs(el).display;
       return !(d === 'inline' || d === 'inline-block' || d === 'inline-flex' || d === 'inline-grid' || d === 'contents' || d === 'ruby');
     }
@@ -286,8 +303,42 @@
       return rows.length ? { type: 'table', rows: rows, cols: cols } : null;
     }
 
+    /* Batang (div/span/i dengan background + lebar/tinggi persen) tidak punya teks, jadi tadinya tidak tergambar sama sekali. */
+    function bgColorOf(el) {
+      var c = cs(el), bg = parseColor(c.backgroundColor);
+      if (bg && bg[3] >= 0.3) return bg;
+      var m = /rgba?\([^)]*\)/.exec(c.backgroundImage || '');
+      var g = m ? parseColor(m[0]) : null;
+      return g && g[3] >= 0.3 ? g : null;
+    }
+    function barBlock(el) {
+      if (el.tagName === 'TABLE' || !el.children.length || el.children.length > 2) return null;
+      var r = el.getBoundingClientRect();
+      if (r.width < 8 || r.height < 3) return null;
+      var fill = null, i, k;
+      for (i = 0; i < el.children.length; i++) { k = el.children[i]; if (usable(k) && bgColorOf(k)) { fill = k; break; } }
+      if (!fill) return null;
+      var direct = ''; Array.prototype.forEach.call(el.childNodes, function (n) { if (n.nodeType === 3) direct += n.textContent; });
+      if (norm(direct)) return null;
+      var rf = fill.getBoundingClientRect(), horiz = rf.height >= r.height - 2.5 && rf.width <= r.width + 1, vert = rf.width >= r.width - 2.5 && rf.height <= r.height + 1;
+      if (!horiz && !vert) return null;
+      var label = norm(fill.textContent), hasKids = false;
+      Array.prototype.forEach.call(fill.children, function (c2) { if (c2.children.length) hasKids = true; });
+      if (hasKids) return null;
+      var vertical = (horiz && vert) ? r.height > r.width : vert;
+      if (vertical ? label.length > 12 : (label || r.height > 26)) return null;
+      var frac = vertical ? rf.height / r.height : rf.width / r.width;
+      frac = Math.max(0, Math.min(1, frac || 0));
+      var track = bgColorOf(el) || [237, 242, 247, 1];
+      return { type: 'bar', vertical: vertical, frac: frac, color: bgColorOf(fill), track: track, label: vertical ? label : '', h: vertical ? Math.max(28, Math.min(90, r.height * 0.7)) : Math.max(4, Math.min(9, r.height * 0.75)) };
+    }
+
     function walk(el) {
       if (!usable(el)) return;
+      var im = imgOf(el);
+      if (im) { var ri = el.getBoundingClientRect(); blocks.push({ type: 'img', img: im, ar: (ri.height || im.h) / (ri.width || im.w), pw: (ri.width || im.w) * 0.75 }); return; }
+      var bb = barBlock(el);
+      if (bb) { blocks.push(bb); return; }
       if (el.tagName === 'TABLE') { var tb = tableBlock(el); if (tb) blocks.push(tb); return; }
       if (el.tagName === 'HR') { blocks.push({ type: 'rule' }); return; }
       var kids = kidsOf(el), st = styleOf(el), c = cs(el);
@@ -358,7 +409,10 @@
       return { rows: rows, pad: pad };
     }
     function colsLayout(b, W) {
-      var gap = 8, pad = 6, n = b.items.length, tw = 0, i;
+      var gap = 8, n = b.items.length, tw = 0, i;
+      var row = b.items.some(function (it) { return it.blocks.some(function (bl) { return bl.type === 'bar' && !bl.vertical; }); }) &&
+        b.items.every(function (it) { return it.blocks.length <= 2 && it.blocks.every(function (bl) { return bl.type !== 'img' && bl.type !== 'table' && bl.type !== 'cols'; }); });
+      var pad = row ? 3 : 6;
       b.items.forEach(function (it) { tw += Math.max(1, it.w); });
       var widths = b.items.map(function (it) { return (W - gap * (n - 1)) * Math.max(1, it.w) / tw; });
       var h = 0;
@@ -366,10 +420,17 @@
         var hh = pad * 2; it.blocks.forEach(function (bl) { hh += heightOf(bl, widths[k] - pad * 2); });
         h = Math.max(h, hh);
       });
-      return { widths: widths, h: h, gap: gap, pad: pad };
+      return { widths: widths, h: h, gap: row ? 4 : gap, pad: pad, row: row };
+    }
+    function imgSize(b, W) {
+      var w = Math.min(W, b.pw), h = w * b.ar, maxH = PH * 0.5;
+      if (h > maxH) { h = maxH; w = h / b.ar; }
+      return { w: w, h: h };
     }
     function heightOf(b, W) {
       if (b.type === 'rule') return 8;
+      if (b.type === 'img') return imgSize(b, W).h + 6;
+      if (b.type === 'bar') return (b.vertical ? b.h : b.h + 4) + 4;
       if (b.type === 'text') { var s = b.style; return s.size * b.gap + wrapText(b.text, s.size, s.bold, W).length * s.size * 1.25; }
       if (b.type === 'table') { var t = tableLayout(b, W), h = 8; t.rows.forEach(function (r) { h += r.h; }); return h; }
       if (b.type === 'cols') return colsLayout(b, W).h + 6;
@@ -406,17 +467,40 @@
       t.rows.forEach(function (row, idx) { if (row.r.head) heads.push(row); drawRow(row, idx); });
       y += 8;
     }
+    function drawImg(b, x0, W, pg) {
+      var sz = imgSize(b, W);
+      ensure(sz.h + 6, pg);
+      pdf.image(b.img, x0 + (W - sz.w) / 2, y, sz.w, sz.h);
+      y += sz.h + 6;
+    }
+    function drawBar(b, x0, W, pg) {
+      var th = b.vertical ? b.h : b.h, yy;
+      ensure(th + 8, pg);
+      if (b.vertical) {
+        var bw = Math.min(W * 0.7, 46), bx = x0 + (W - bw) / 2, fh = Math.max(1.5, b.frac * th);
+        pdf.rect(bx, y + 2, bw, th, b.track, null);
+        pdf.rect(bx, y + 2 + th - fh, bw, fh, b.color, null);
+        if (b.label && fh >= 11) { var lw = measure(b.label, 7, true); pdf.text(b.label, bx + (bw - lw) / 2, y + 2 + th - fh + 8.5, 7, true, lum(b.color) > 0.62 ? [40, 50, 60] : [255, 255, 255]); }
+        y += th + 8;
+      } else {
+        yy = y + 2;
+        pdf.rect(x0, yy, W, th, b.track, null);
+        if (b.frac > 0) pdf.rect(x0, yy, Math.max(1.5, b.frac * W), th, b.color, null);
+        y += th + 8;
+      }
+    }
     function drawCols(b, x0, W, pg) {
       var L = colsLayout(b, W);
       ensure(L.h + 6, pg);
       var y0 = y, x = x0;
       b.items.forEach(function (it, k) {
-        pdf.rect(x, y0, L.widths[k], L.h, [247, 250, 248], [200, 210, 205], 0.6);
+        if (!L.row) pdf.rect(x, y0, L.widths[k], L.h, [247, 250, 248], [200, 210, 205], 0.6);
         y = y0 + L.pad;
-        drawBlocks(it.blocks, x + L.pad, L.widths[k] - L.pad * 2, false);
+        drawBlocks(it.blocks, x + (L.row ? 0 : L.pad), L.widths[k] - (L.row ? 0 : L.pad * 2), false);
         x += L.widths[k] + L.gap;
       });
-      y = y0 + L.h + 6;
+      if (L.row) { pdf.line(x0, y0 + L.h + 2, x0 + W, y0 + L.h + 2, [226, 232, 228], 0.5); y = y0 + L.h + 4; }
+      else y = y0 + L.h + 6;
     }
     function drawBlocks(list, x0, W, pg) {
       list.forEach(function (b) {
@@ -424,6 +508,8 @@
         else if (b.type === 'text') drawText(b, x0, W, pg);
         else if (b.type === 'table') drawTable(b, x0, W, pg);
         else if (b.type === 'cols') drawCols(b, x0, W, pg);
+        else if (b.type === 'img') drawImg(b, x0, W, pg);
+        else if (b.type === 'bar') drawBar(b, x0, W, pg);
       });
     }
     drawBlocks(blocks, MX, W0, true);
@@ -451,6 +537,58 @@
     if (ms) t._h = setTimeout(function () { t.style.display = 'none'; }, ms);
   }
 
+  /* SVG (donut Passing Ratio, sparkline, grafik area) -> JPEG, lalu disisipkan ke PDF sebagai gambar. */
+  function svgToJpeg(svg, win, cb) {
+    var r = svg.getBoundingClientRect(), w = Math.round(r.width), h = Math.round(r.height), done = false;
+    function fin(v) { if (!done) { done = true; cb(v); } }
+    if (w < 60 || h < 30) return fin(null);
+    try {
+      var cl = svg.cloneNode(true), src = [svg].concat(Array.prototype.slice.call(svg.querySelectorAll('*'))), dst = [cl].concat(Array.prototype.slice.call(cl.querySelectorAll('*')));
+      var PROPS = ['fill', 'fill-opacity', 'stroke', 'stroke-width', 'stroke-opacity', 'stroke-linecap', 'stroke-linejoin', 'opacity', 'font-size', 'font-weight', 'text-anchor', 'letter-spacing'];
+      var GFX = { path: 1, rect: 1, circle: 1, ellipse: 1, line: 1, polyline: 1, polygon: 1, text: 1, tspan: 1, g: 1 };
+      src.forEach(function (o, i) {
+        var t = dst[i], tag = (o.localName || '').toLowerCase();
+        if (!GFX[tag]) return;
+        var c = win.getComputedStyle(o), css = (t.getAttribute('style') || '').replace(/;?\s*$/, ';');
+        PROPS.forEach(function (pn) { var v = c.getPropertyValue(pn); if (v) css += pn + ':' + v + ';'; });
+        if (tag === 'text' || tag === 'tspan') css += 'font-family:Helvetica,Arial,sans-serif;';
+        t.setAttribute('style', css);
+      });
+      if (!cl.getAttribute('viewBox')) {
+        var aw = parseFloat(svg.getAttribute('width')), ah = parseFloat(svg.getAttribute('height'));
+        if (aw > 0 && ah > 0) cl.setAttribute('viewBox', '0 0 ' + aw + ' ' + ah);
+      }
+      cl.setAttribute('width', w); cl.setAttribute('height', h);
+      cl.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+      var xml = new XMLSerializer().serializeToString(cl), img = new Image();
+      var sc = Math.max(1, Math.min(2, Math.sqrt(1600000 / (w * h))));
+      img.onload = function () {
+        try {
+          var cv = document.createElement('canvas'); cv.width = Math.round(w * sc); cv.height = Math.round(h * sc);
+          var cx = cv.getContext('2d'); cx.fillStyle = '#ffffff'; cx.fillRect(0, 0, cv.width, cv.height);
+          cx.drawImage(img, 0, 0, cv.width, cv.height);
+          fin({ w: cv.width, h: cv.height, data: atob(cv.toDataURL('image/jpeg', 0.88).split(',')[1]) });
+        } catch (e) { fin(null); }
+      };
+      img.onerror = function () { fin(null); };
+      setTimeout(function () { fin(null); }, 5000);
+      img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(xml);
+    } catch (e) { fin(null); }
+  }
+  function rasterizeSvgs(d, next) {
+    var list = Array.prototype.filter.call(d.querySelectorAll('svg'), function (sv) {
+      var cs = d.defaultView.getComputedStyle(sv); return cs.display !== 'none' && cs.visibility !== 'hidden';
+    }), left = list.length;
+    imgStore = [];
+    if (!left) return next();
+    list.forEach(function (sv) {
+      svgToJpeg(sv, d.defaultView, function (res) {
+        if (res) { imgStore.push(res); sv.setAttribute('data-ppicimg', String(imgStore.length - 1)); }
+        if (--left === 0) next();
+      });
+    });
+  }
+
   /* Tulis HTML ke iframe tersembunyi (tanpa skrip), baca tata letaknya, buat PDF. */
   function renderHtmlToPdf(html, cfg, done) {
     var f = document.createElement('iframe');
@@ -459,11 +597,22 @@
     document.body.appendChild(f);
     var d = f.contentDocument;
     d.open(); d.write(html); d.close();
+    /* animasi batang/grafik (ppicBarGrow, ppicCardEnter, dll.) belum selesai saat dibaca -> ukuran 0; matikan. */
+    try {
+      var st = d.createElement('style');
+      st.textContent = '*,*::before,*::after{animation:none!important;transition:none!important}';
+      d.head.appendChild(st);
+      Array.prototype.forEach.call(d.querySelectorAll('details'), function (x) { x.setAttribute('open', ''); });
+      Array.prototype.forEach.call(d.querySelectorAll('summary'), function (x) { x.parentNode && x.parentNode.removeChild(x); });
+    } catch (e0) {}
+    function cleanup() { try { f.parentNode.removeChild(f); } catch (e2) {} }
     setTimeout(function () {
-      var buf = null, err = null;
-      try { buf = pdfFromDocument(d, cfg); } catch (e) { err = e; }
-      try { f.parentNode.removeChild(f); } catch (e2) {}
-      done(err, buf);
+      rasterizeSvgs(d, function () {
+        var buf = null, err = null;
+        try { buf = pdfFromDocument(d, cfg); } catch (e) { err = e; }
+        imgStore = []; cleanup();
+        done(err, buf);
+      });
     }, 300);
   }
 
@@ -481,89 +630,11 @@
     sendPdf(buf, cfg);
   }
 
-
-  /* Render visual khusus untuk laporan yang meminta visualDirect.
-     Berbeda dari PDF builder berbasis teks/tabel, html2canvas merender DOM, SVG dan CSS sebagai tampilan. */
-  function loadHtml2Pdf() {
-    return new Promise(function (resolve, reject) {
-      if (window.html2pdf) { resolve(); return; }
-      var sc = document.createElement('script');
-      sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js';
-      sc.onload = function () { resolve(); };
-      sc.onerror = function () { reject(new Error('Pustaka PDF visual gagal dimuat. Periksa koneksi internet.')); };
-      document.head.appendChild(sc);
-    });
-  }
-
-  function renderVisualHtmlToPdf(html, cfg, done) {
-    var f = null;
-    loadHtml2Pdf().then(function () {
-      f = document.createElement('iframe');
-      f.setAttribute('aria-hidden', 'true');
-      f.style.cssText = 'position:fixed;left:-20000px;top:0;width:1100px;height:1000px;border:0;opacity:0;pointer-events:none';
-      document.body.appendChild(f);
-      var d = f.contentDocument;
-      d.open(); d.write(html); d.close();
-
-      function waitForLayout() {
-        var fonts = d.fonts && d.fonts.ready ? d.fonts.ready : Promise.resolve();
-        var imgs = Array.prototype.map.call(d.images || [], function (im) {
-          if (im.complete) return Promise.resolve();
-          return new Promise(function (r) { im.onload = r; im.onerror = r; setTimeout(r, 2500); });
-        });
-        return Promise.all([fonts].concat(imgs)).then(function () {
-          return new Promise(function (r) { setTimeout(r, 900); });
-        });
-      }
-      return waitForLayout().then(function () {
-        var root = d.getElementById('ppicRoot') || d.body;
-        var width = Math.max(900, Math.min(1400, root.scrollWidth || 1100));
-        root.style.width = width + 'px';
-        root.style.maxWidth = 'none';
-        root.style.background = '#fff';
-        var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
-          (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-        return window.html2pdf().set({
-          margin: [8, 8, 10, 8],
-          filename: cfg.filename || 'laporan.pdf',
-          image: { type: 'jpeg', quality: 0.94 },
-          html2canvas: { scale: isIOS ? 1.15 : 1.5, useCORS: true, allowTaint: false,
-            backgroundColor: '#ffffff', logging: false, scrollX: 0, scrollY: 0, windowWidth: width },
-          jsPDF: { unit: 'mm', format: 'a4', orientation: cfg.orientation || 'landscape', compress: true },
-          pagebreak: { mode: ['css', 'legacy'], avoid: ['.grading-overview-grid', '.chart-card', '.trend-card'] }
-        }).from(root).outputPdf('blob');
-      });
-    }).then(function (blob) {
-      try { if (f && f.parentNode) f.parentNode.removeChild(f); } catch (e) {}
-      return blob.arrayBuffer();
-    }).then(function (buf) { done(null, buf); }).catch(function (e) {
-      try { if (f && f.parentNode) f.parentNode.removeChild(f); } catch (e2) {}
-      done(e, null);
-    });
-  }
-
   /* Salin satu halaman aplikasi (tata letak cetak) lalu ekspor sebagai PDF, tanpa jendela popup. */
   function exportPage(cfg) {
     var page = document.getElementById(cfg.nodeId);
     var restore = function () { document.body.classList.remove(cfg.bodyClass); if (cfg.after) { try { cfg.after(); } catch (e) {} } };
     if (!page) { restore(); return; }
-    if (cfg.visualDirect) {
-      var styles = Array.prototype.map.call(document.querySelectorAll('style'), function (st) { return st.textContent; }).join('\n');
-      var forcedStyles = styles.replace(/@media\s+print\s*\{/g, '@media all{');
-      var links = Array.prototype.map.call(document.querySelectorAll('link[rel="stylesheet"]'), function (ln) {
-        return '<link rel="stylesheet" href="' + ln.href.replace(/&/g, '&amp;').replace(/"/g, '&quot;') + '">';
-      }).join('');
-      var visualClone = page.cloneNode(true);
-      visualClone.classList.remove('page-hidden');
-      Array.prototype.forEach.call(visualClone.querySelectorAll('script,.print-btn,.expand-btn,.print-btn-group'), function (el) { el.remove(); });
-      var visualHtml = '<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=1100"><title>' + (cfg.title || 'Laporan') + '</title>' + links +
-        '<style>' + styles + '</style><style>' + forcedStyles + '</style><style>html,body{margin:0!important;padding:0!important;width:1100px!important;background:#fff!important;color:#111827!important}#app,main{display:block!important;width:1100px!important;max-width:none!important;margin:0!important;padding:0!important;background:#fff!important}.page-hidden{display:block!important}</style></head>' +
-        '<body class="' + (cfg.bodyClass || '') + '"><div id="app" style="display:block"><main style="display:block;padding:0"><div id="ppicRoot">' + visualClone.outerHTML + '</div></main></div></body></html>';
-      restore();
-      toast('Membuat PDF visual…');
-      renderVisualHtmlToPdf(visualHtml, cfg, function (err, buf) { finishExport(err, buf, cfg); });
-      return;
-    }
     var orig = Array.prototype.map.call(document.querySelectorAll('style'), function (st) { return st.textContent; }).join('\n');
     var forced = orig.replace(/@media\s+print\s*\{/g, '@media all{');
     var clone = page.cloneNode(true);
@@ -583,14 +654,11 @@
       __ppicFake: true,
       document: {
         open: function () {}, write: function (h) { chunks.push(h); },
-        close: function () { toast(cfg.visualDirect ? 'Membuat PDF visual…' : 'Membuat PDF…'); setTimeout(function () {
-          if (cfg.visualDirect) renderVisualHtmlToPdf(chunks.join(''), cfg, function (err, buf) { finishExport(err, buf, cfg); });
-          else renderHtmlToPdf(chunks.join(''), cfg, function (err, buf) { finishExport(err, buf, cfg); });
-        }, 0); }
+        close: function () { toast('Membuat PDF…'); setTimeout(function () { renderHtmlToPdf(chunks.join(''), cfg, function (err, buf) { finishExport(err, buf, cfg); }); }, 0); }
       },
       focus: function () {}, print: function () {}, close: function () {}
     };
   }
 
-  window.PPICKit = { version: '2', openPrintWindow: openPrintWindow, attachPrintBar: attachPrintBar, exportPage: exportPage, exportWindow: exportWindow, _pdfFromDocument: pdfFromDocument, _renderHtmlToPdf: renderHtmlToPdf };
+  window.PPICKit = { version: '3', openPrintWindow: openPrintWindow, attachPrintBar: attachPrintBar, exportPage: exportPage, exportWindow: exportWindow, _pdfFromDocument: pdfFromDocument, _renderHtmlToPdf: renderHtmlToPdf };
 })();
