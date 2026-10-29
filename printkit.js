@@ -481,47 +481,65 @@
     sendPdf(buf, cfg);
   }
 
-  /* Render visual HTML2PDF khusus laporan yang membutuhkan SVG/grafik. Jalur PDF lama tetap default. */
+
+  /* Render visual khusus untuk laporan yang meminta visualDirect.
+     Berbeda dari PDF builder berbasis teks/tabel, html2canvas merender DOM, SVG dan CSS sebagai tampilan. */
+  function loadHtml2Pdf() {
+    return new Promise(function (resolve, reject) {
+      if (window.html2pdf) { resolve(); return; }
+      var sc = document.createElement('script');
+      sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js';
+      sc.onload = function () { resolve(); };
+      sc.onerror = function () { reject(new Error('Pustaka PDF visual gagal dimuat. Periksa koneksi internet.')); };
+      document.head.appendChild(sc);
+    });
+  }
+
   function renderVisualHtmlToPdf(html, cfg, done) {
-    var f = document.createElement('iframe');
-    f.setAttribute('sandbox', 'allow-same-origin allow-scripts');
-    f.style.cssText = 'position:fixed;left:-20000px;top:0;width:1100px;height:1200px;border:0;opacity:0;pointer-events:none';
-    document.body.appendChild(f);
-    var finished = false;
-    function finish(err, buf) {
-      if (finished) return; finished = true;
-      try { f.parentNode.removeChild(f); } catch (e) {}
-      done(err, buf);
-    }
-    try {
+    var f = null;
+    loadHtml2Pdf().then(function () {
+      f = document.createElement('iframe');
+      f.setAttribute('aria-hidden', 'true');
+      f.style.cssText = 'position:fixed;left:-20000px;top:0;width:1100px;height:1000px;border:0;opacity:0;pointer-events:none';
+      document.body.appendChild(f);
       var d = f.contentDocument;
       d.open(); d.write(html); d.close();
-      var sc = d.createElement('script');
-      sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js';
-      sc.onload = function () {
-        setTimeout(function () {
-          try {
-            var root = d.getElementById('ppicRoot') || d.querySelector('#page-grading') || d.body;
-            if (!root || !f.contentWindow.html2pdf) throw new Error('Mesin PDF visual tidak siap. Periksa koneksi internet lalu coba lagi.');
-            var w = Math.max(900, root.scrollWidth || 1100);
-            var h = Math.max(500, root.scrollHeight || 900);
-            var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-            var maxPx = isIOS ? 3000000 : 10000000;
-            var scale = Math.max(0.65, Math.min(isIOS ? 1.1 : 1.5, Math.sqrt(maxPx / Math.max(1, w*h))));
-            f.contentWindow.html2pdf().set({
-              margin: [7, 7, 9, 7],
-              filename: cfg.filename || 'Laporan-Grading.pdf',
-              image: { type: 'jpeg', quality: isIOS ? 0.86 : 0.93 },
-              html2canvas: { scale: scale, useCORS: true, backgroundColor: '#ffffff', scrollY: 0, windowWidth: w, logging: false },
-              jsPDF: { unit: 'mm', format: 'a4', orientation: cfg.orientation || 'landscape', compress: true },
-              pagebreak: { mode: ['css', 'legacy'], avoid: ['.card', '.grading-eval-card', '.grading-evaluation-grid', 'tr'] }
-            }).from(root).outputPdf('arraybuffer').then(function (buf) { finish(null, buf); }).catch(function (e) { finish(e, null); });
-          } catch (e) { finish(e, null); }
-        }, 700);
-      };
-      sc.onerror = function () { finish(new Error('Pustaka PDF visual tidak dapat dimuat. Periksa koneksi internet.'), null); };
-      d.head.appendChild(sc);
-    } catch (e) { finish(e, null); }
+
+      function waitForLayout() {
+        var fonts = d.fonts && d.fonts.ready ? d.fonts.ready : Promise.resolve();
+        var imgs = Array.prototype.map.call(d.images || [], function (im) {
+          if (im.complete) return Promise.resolve();
+          return new Promise(function (r) { im.onload = r; im.onerror = r; setTimeout(r, 2500); });
+        });
+        return Promise.all([fonts].concat(imgs)).then(function () {
+          return new Promise(function (r) { setTimeout(r, 900); });
+        });
+      }
+      return waitForLayout().then(function () {
+        var root = d.getElementById('ppicRoot') || d.body;
+        var width = Math.max(900, Math.min(1400, root.scrollWidth || 1100));
+        root.style.width = width + 'px';
+        root.style.maxWidth = 'none';
+        root.style.background = '#fff';
+        var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+          (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+        return window.html2pdf().set({
+          margin: [8, 8, 10, 8],
+          filename: cfg.filename || 'laporan.pdf',
+          image: { type: 'jpeg', quality: 0.94 },
+          html2canvas: { scale: isIOS ? 1.15 : 1.5, useCORS: true, allowTaint: false,
+            backgroundColor: '#ffffff', logging: false, scrollX: 0, scrollY: 0, windowWidth: width },
+          jsPDF: { unit: 'mm', format: 'a4', orientation: cfg.orientation || 'landscape', compress: true },
+          pagebreak: { mode: ['css', 'legacy'], avoid: ['.grading-overview-grid', '.chart-card', '.trend-card'] }
+        }).from(root).outputPdf('blob');
+      });
+    }).then(function (blob) {
+      try { if (f && f.parentNode) f.parentNode.removeChild(f); } catch (e) {}
+      return blob.arrayBuffer();
+    }).then(function (buf) { done(null, buf); }).catch(function (e) {
+      try { if (f && f.parentNode) f.parentNode.removeChild(f); } catch (e2) {}
+      done(e, null);
+    });
   }
 
   /* Salin satu halaman aplikasi (tata letak cetak) lalu ekspor sebagai PDF, tanpa jendela popup. */
@@ -529,18 +547,33 @@
     var page = document.getElementById(cfg.nodeId);
     var restore = function () { document.body.classList.remove(cfg.bodyClass); if (cfg.after) { try { cfg.after(); } catch (e) {} } };
     if (!page) { restore(); return; }
+    if (cfg.visualDirect) {
+      var styles = Array.prototype.map.call(document.querySelectorAll('style'), function (st) { return st.textContent; }).join('\n');
+      var forcedStyles = styles.replace(/@media\s+print\s*\{/g, '@media all{');
+      var links = Array.prototype.map.call(document.querySelectorAll('link[rel="stylesheet"]'), function (ln) {
+        return '<link rel="stylesheet" href="' + ln.href.replace(/&/g, '&amp;').replace(/"/g, '&quot;') + '">';
+      }).join('');
+      var visualClone = page.cloneNode(true);
+      visualClone.classList.remove('page-hidden');
+      Array.prototype.forEach.call(visualClone.querySelectorAll('script,.print-btn,.expand-btn,.print-btn-group'), function (el) { el.remove(); });
+      var visualHtml = '<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=1100"><title>' + (cfg.title || 'Laporan') + '</title>' + links +
+        '<style>' + styles + '</style><style>' + forcedStyles + '</style><style>html,body{margin:0!important;padding:0!important;width:1100px!important;background:#fff!important;color:#111827!important}#app,main{display:block!important;width:1100px!important;max-width:none!important;margin:0!important;padding:0!important;background:#fff!important}.page-hidden{display:block!important}</style></head>' +
+        '<body class="' + (cfg.bodyClass || '') + '"><div id="app" style="display:block"><main style="display:block;padding:0"><div id="ppicRoot">' + visualClone.outerHTML + '</div></main></div></body></html>';
+      restore();
+      toast('Membuat PDF visual…');
+      renderVisualHtmlToPdf(visualHtml, cfg, function (err, buf) { finishExport(err, buf, cfg); });
+      return;
+    }
     var orig = Array.prototype.map.call(document.querySelectorAll('style'), function (st) { return st.textContent; }).join('\n');
     var forced = orig.replace(/@media\s+print\s*\{/g, '@media all{');
     var clone = page.cloneNode(true);
     clone.classList.remove('page-hidden');
     Array.prototype.forEach.call(clone.querySelectorAll('script,.print-btn,.expand-btn'), function (el) { el.remove(); });
-    var visualCss = cfg.visualPdf ? '<style>html,body{margin:0!important;padding:0!important;background:#fff!important;color:#111827!important}body.print-grading,#app,main,#page-grading{background:#fff!important;color:#111827!important}#app{width:100%!important;max-width:none!important}main{width:100%!important;max-width:none!important}#page-grading{box-shadow:none!important;overflow:visible!important}#page-grading .grading-evaluation-grid{break-inside:avoid!important;page-break-inside:avoid!important}#page-grading .grading-eval-card{break-inside:avoid!important;page-break-inside:avoid!important}#page-grading svg{display:block!important;overflow:visible!important;max-width:100%!important}#page-grading .chart,#page-grading .track{overflow:visible!important}</style>' : '';
-    var html = '<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=1100"><style>' + orig + '</style><style>' + forced + '</style><style>html,body{margin:0!important;background:#fff!important}</style>' + visualCss + '</head>' +
-      '<body class="' + cfg.bodyClass + '"><div id="app" style="display:block;background:#fff!important;width:100%!important"><main style="display:block;padding:0;background:#fff!important;width:100%!important"><div id="ppicRoot">' + clone.outerHTML + '</div></main></div></body></html>';
+    var html = '<!doctype html><html lang="id"><head><meta charset="utf-8"><style>' + orig + '</style><style>' + forced + '</style><style>html,body{margin:0!important;background:#fff!important}</style></head>' +
+      '<body class="' + cfg.bodyClass + '"><div id="app" style="display:block"><main style="display:block;padding:0">' + clone.outerHTML + '</main></div></body></html>';
     restore();
     toast('Membuat PDF…');
-    var render = cfg.visualPdf ? renderVisualHtmlToPdf : renderHtmlToPdf;
-    render(html, cfg, function (err, buf) { finishExport(err, buf, cfg); });
+    renderHtmlToPdf(html, cfg, function (err, buf) { finishExport(err, buf, cfg); });
   }
 
   /* Pengganti window.open: kode cetak yang sudah ada menulis HTML ke objek ini, lalu hasilnya diekspor sebagai PDF. */
@@ -550,7 +583,10 @@
       __ppicFake: true,
       document: {
         open: function () {}, write: function (h) { chunks.push(h); },
-        close: function () { toast('Membuat PDF…'); setTimeout(function () { renderHtmlToPdf(chunks.join(''), cfg, function (err, buf) { finishExport(err, buf, cfg); }); }, 0); }
+        close: function () { toast(cfg.visualDirect ? 'Membuat PDF visual…' : 'Membuat PDF…'); setTimeout(function () {
+          if (cfg.visualDirect) renderVisualHtmlToPdf(chunks.join(''), cfg, function (err, buf) { finishExport(err, buf, cfg); });
+          else renderHtmlToPdf(chunks.join(''), cfg, function (err, buf) { finishExport(err, buf, cfg); });
+        }, 0); }
       },
       focus: function () {}, print: function () {}, close: function () {}
     };
